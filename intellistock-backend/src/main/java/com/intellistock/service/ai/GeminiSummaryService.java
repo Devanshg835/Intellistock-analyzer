@@ -35,7 +35,7 @@ public class GeminiSummaryService {
             return generateLocalFallbackSummary(data, overallScore, riskScore, recommendation);
         }
 
-        String url = String.format("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=%s", apiKey);
+       String url = String.format("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=%s", apiKey);
         String prompt = buildPrompt(data, overallScore, financialScore, technicalScore, newsScore, riskScore, recommendation);
         log.info("Invoking Gemini API for symbol: {}", data.getSymbol());
 

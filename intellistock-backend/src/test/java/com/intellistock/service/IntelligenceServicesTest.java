@@ -142,6 +142,7 @@ public class IntelligenceServicesTest {
         FmpClient fmpClient = org.mockito.Mockito.mock(FmpClient.class);
         FinnhubClient finnhubClient = org.mockito.Mockito.mock(FinnhubClient.class);
         TwelveDataClient twelveDataClient = org.mockito.Mockito.mock(TwelveDataClient.class);
+        YahooFinanceClient yahooFinanceClient = org.mockito.Mockito.mock(YahooFinanceClient.class);
         AlphaVantageClient alphaVantageClient = org.mockito.Mockito.mock(AlphaVantageClient.class);
         NewsClient newsClient = org.mockito.Mockito.mock(NewsClient.class);
         com.intellistock.config.AnalysisCache analysisCache = org.mockito.Mockito.mock(com.intellistock.config.AnalysisCache.class);
@@ -154,9 +155,9 @@ public class IntelligenceServicesTest {
         GeminiSummaryService gemini = new GeminiSummaryService(new RestTemplate(), "");
 
         AnalysisService analysisService = new AnalysisService(
-            stockService, fmpClient, finnhubClient, twelveDataClient, alphaVantageClient, newsClient,
-            analysisCache, finScore, techScore, newsSentiment, riskScore, conf, engine, gemini
-        );
+    stockService, fmpClient, finnhubClient, twelveDataClient, yahooFinanceClient, alphaVantageClient, newsClient,
+    analysisCache, finScore, techScore, newsSentiment, riskScore, conf, engine, gemini
+);
 
         org.mockito.Mockito.when(twelveDataClient.getTimeSeries("MSFT")).thenReturn(Optional.empty());
 

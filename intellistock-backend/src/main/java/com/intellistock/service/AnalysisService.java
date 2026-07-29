@@ -30,11 +30,11 @@ public class AnalysisService {
     private final FmpClient fmpClient;
     private final FinnhubClient finnhubClient;
     private final TwelveDataClient twelveDataClient;
+    private final YahooFinanceClient yahooFinanceClient;
     private final AlphaVantageClient alphaVantageClient;
     private final NewsClient newsClient;
     private final AnalysisCache analysisCache;
 
-    // Phase 3 Intelligence Layer Services
     private final FinancialScoreService financialScoreService;
     private final TechnicalScoreService technicalScoreService;
     private final NewsSentimentService newsSentimentService;
@@ -45,7 +45,7 @@ public class AnalysisService {
 
     @Autowired
     public AnalysisService(StockService stockService, FmpClient fmpClient,
-                           FinnhubClient finnhubClient, TwelveDataClient twelveDataClient,
+                           FinnhubClient finnhubClient, TwelveDataClient twelveDataClient,YahooFinanceClient yahooFinanceClient,
                            AlphaVantageClient alphaVantageClient, NewsClient newsClient,
                            AnalysisCache analysisCache, FinancialScoreService financialScoreService,
                            TechnicalScoreService technicalScoreService, NewsSentimentService newsSentimentService,
@@ -55,6 +55,7 @@ public class AnalysisService {
         this.fmpClient = fmpClient;
         this.finnhubClient = finnhubClient;
         this.twelveDataClient = twelveDataClient;
+        this.yahooFinanceClient = yahooFinanceClient;
         this.alphaVantageClient = alphaVantageClient;
         this.newsClient = newsClient;
         this.analysisCache = analysisCache;
@@ -70,7 +71,6 @@ public class AnalysisService {
     public AnalyzeResponse analyzeStock(String symbol) {
         String cleanSymbol = symbol.trim().toUpperCase();
 
-        // Check cache first
         AnalyzeResponse cachedResponse = analysisCache.get(cleanSymbol);
         if (cachedResponse != null) {
             return cachedResponse;
@@ -78,13 +78,8 @@ public class AnalysisService {
 
         log.info("Cache miss. Firing API calls for symbol: {}", cleanSymbol);
 
-        // Fetch normalized stock data via clients and failovers
         AnalysisData data = fetchUnifiedData(cleanSymbol);
-
-        // Compute scores and recommendations
         AnalyzeResponse response = processAnalysis(data);
-
-        // Save to cache
         analysisCache.put(cleanSymbol, response);
 
         return response;
@@ -94,33 +89,42 @@ public class AnalysisService {
         AnalysisData.AnalysisDataBuilder builder = AnalysisData.builder().symbol(symbol);
         Optional<Stock> localStockOpt = stockService.getStockBySymbol(symbol);
 
-        // --- Price Fallback Tree ---
+      // --- Price Fallback Tree ---
         log.debug("Fetching price data for symbol: {}", symbol);
-        Optional<FinnhubClient.FinnhubQuote> finnhubQuoteOpt = finnhubClient.getQuote(symbol);
-        if (finnhubQuoteOpt.isPresent() && finnhubQuoteOpt.get().getC() != null && finnhubQuoteOpt.get().getC() > 0) {
-            builder.currentPrice(finnhubQuoteOpt.get().getC())
-                   .priceSource("Finnhub API")
+        String nseSymbol = symbol + ":NSE";
+
+        Optional<Double> yahooPriceOpt = yahooFinanceClient.getNsePrice(symbol);
+        if (yahooPriceOpt.isPresent()) {
+            builder.currentPrice(yahooPriceOpt.get())
+                   .priceSource("Yahoo Finance (NSE)")
                    .hasRealPrice(true);
         } else {
-            Optional<TwelveDataClient.TwelveDataQuote> twelveDataQuoteOpt = twelveDataClient.getQuote(symbol);
+            Optional<TwelveDataClient.TwelveDataQuote> twelveDataQuoteOpt = twelveDataClient.getQuote(nseSymbol);
             if (twelveDataQuoteOpt.isPresent() && twelveDataQuoteOpt.get().getPriceAsDouble() != null) {
                 builder.currentPrice(twelveDataQuoteOpt.get().getPriceAsDouble())
-                       .priceSource("Twelve Data API")
+                       .priceSource("Twelve Data API (NSE)")
                        .hasRealPrice(true);
             } else {
-                Optional<Double> avPriceOpt = alphaVantageClient.getPrice(symbol);
-                if (avPriceOpt.isPresent()) {
-                    builder.currentPrice(avPriceOpt.get())
-                           .priceSource("Alpha Vantage API")
+                Optional<FinnhubClient.FinnhubQuote> finnhubQuoteOpt = finnhubClient.getQuote(symbol);
+                if (finnhubQuoteOpt.isPresent() && finnhubQuoteOpt.get().getC() != null && finnhubQuoteOpt.get().getC() > 0) {
+                    builder.currentPrice(finnhubQuoteOpt.get().getC())
+                           .priceSource("Finnhub API")
                            .hasRealPrice(true);
-                } else if (localStockOpt.isPresent()) {
-                    builder.currentPrice(localStockOpt.get().getCurrentPrice())
-                           .priceSource("Local H2 Database")
-                           .hasRealPrice(false);
                 } else {
-                    builder.currentPrice(generateMockPrice(symbol))
-                           .priceSource("Dynamic Fallback Engine")
-                           .hasRealPrice(false);
+                    Optional<Double> avPriceOpt = alphaVantageClient.getPrice(symbol);
+                    if (avPriceOpt.isPresent()) {
+                        builder.currentPrice(avPriceOpt.get())
+                               .priceSource("Alpha Vantage API")
+                               .hasRealPrice(true);
+                    } else if (localStockOpt.isPresent()) {
+                        builder.currentPrice(localStockOpt.get().getCurrentPrice())
+                               .priceSource("Local H2 Database")
+                               .hasRealPrice(false);
+                    } else {
+                        builder.currentPrice(generateMockPrice(symbol))
+                               .priceSource("Dynamic Fallback Engine")
+                               .hasRealPrice(false);
+                    }
                 }
             }
         }
@@ -217,32 +221,24 @@ public class AnalysisService {
     }
 
     private AnalyzeResponse processAnalysis(AnalysisData data) {
-        // News Sentiment calculation
         String newsSentiment = newsSentimentService.analyzeSentiment(data.getNewsHeadlines());
         int newsScore = newsSentimentService.calculateScore(newsSentiment);
 
-        // Technical Trend calculation
         int technicalScore = technicalScoreService.calculateScore(data.getTechnicalTrend());
 
-        // Fundamentals calculation
         int financialScore = financialScoreService.calculateScore(data.getPeRatio(), data.getRoe(), data.getDebtToEquity());
 
-        // Risk calculation
         int riskScore = riskScoreService.calculateScore(data.getDebtToEquity(), data.getPeRatio());
         String riskLevel = riskScoreService.determineRiskLevel(riskScore);
 
-        // Confidence calculation
         int confidenceScore = confidenceService.calculateScore(data);
 
-        // Recommendation calculation
         int overallScore = recommendationEngine.calculateOverallScore(financialScore, technicalScore, newsScore, riskScore);
         String recommendation = recommendationEngine.determineRecommendation(overallScore, riskScore);
         String recommendationReason = recommendationEngine.generateReason(overallScore, riskScore, financialScore, technicalScore, newsScore);
 
-        // Gemini AI Summary generation
         String aiSummary = geminiSummaryService.generateSummary(data, overallScore, financialScore, technicalScore, newsScore, riskScore, recommendation);
 
-        // Prepare sources lists
         List<String> sources = new ArrayList<>();
         sources.add(data.getPriceSource());
         sources.add(data.getFundamentalSource());
@@ -267,9 +263,8 @@ public class AnalysisService {
                 .newsSentiment(newsSentiment)
                 .confidenceScore(confidenceScore)
                 .sources(sources)
-                .summary(aiSummary) // Map to summary for backward compatibility
+                .summary(aiSummary)
                 .sector(data.getSector())
-                // Expanded Phase 3 indicators
                 .recommendation(recommendation)
                 .recommendationReason(recommendationReason)
                 .aiSummary(aiSummary)
@@ -328,21 +323,18 @@ public class AnalysisService {
     public StockHistoryResponse getStockHistory(String symbol) {
         String cleanSymbol = symbol.trim().toUpperCase();
 
-        // 1. Try Twelve Data Time Series History
-        Optional<TwelveDataClient.TwelveDataTimeSeries> twelveDataSeries = twelveDataClient.getTimeSeries(cleanSymbol);
+        Optional<TwelveDataClient.TwelveDataTimeSeries> twelveDataSeries = twelveDataClient.getTimeSeries(cleanSymbol + ":NSE");
         if (twelveDataSeries.isPresent()) {
             List<HistoryDataPoint> history = twelveDataSeries.get().getValues().stream()
                     .map(v -> new HistoryDataPoint(v.getDatetime(), v.getCloseAsDouble()))
                     .filter(pt -> pt.getPrice() != null && pt.getDate() != null)
                     .collect(Collectors.toList());
             if (!history.isEmpty()) {
-                // Reverse to chronological order (Twelve Data returns newest first)
                 java.util.Collections.reverse(history);
                 return new StockHistoryResponse(cleanSymbol, history);
             }
         }
 
-        // 2. Mock Fallback (Daily random walk series of last 30 business days)
         log.info("API history fetch failed or unavailable. Generating mock random walk history for symbol: {}", cleanSymbol);
         return generateMockHistory(cleanSymbol);
     }
@@ -350,7 +342,7 @@ public class AnalysisService {
     private StockHistoryResponse generateMockHistory(String symbol) {
         List<HistoryDataPoint> history = new ArrayList<>();
         double currentPrice = generateMockPrice(symbol);
-        
+
         Optional<Stock> localStockOpt = stockService.getStockBySymbol(symbol);
         if (localStockOpt.isPresent()) {
             currentPrice = localStockOpt.get().getCurrentPrice();
@@ -359,23 +351,23 @@ public class AnalysisService {
         java.time.LocalDate date = java.time.LocalDate.now();
         int points = 30;
         double price = currentPrice;
-        
+
         java.util.Random rand = new java.util.Random(symbol.hashCode());
         for (int i = 0; i < points; i++) {
             date = date.minusDays(1);
             while (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
                 date = date.minusDays(1);
             }
-            
+
             double changePct = -0.03 + (rand.nextDouble() * 0.06);
             price = price / (1.0 + changePct);
-            
+
             history.add(new HistoryDataPoint(date.toString(), Math.round(price * 100.0) / 100.0));
         }
-        
+
         java.util.Collections.reverse(history);
         history.add(new HistoryDataPoint(java.time.LocalDate.now().toString(), currentPrice));
-        
+
         return new StockHistoryResponse(symbol, history);
     }
 }
