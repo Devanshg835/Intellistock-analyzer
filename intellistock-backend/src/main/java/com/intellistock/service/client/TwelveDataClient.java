@@ -35,7 +35,7 @@ public class TwelveDataClient {
 
         try {
             TwelveDataQuote response = restTemplate.getForObject(url, TwelveDataQuote.class);
-            if (response != null && response.getPrice() != null) {
+            if (response != null && response.getClose() != null) {
                 return Optional.of(response);
             }
             log.warn("Twelve Data quote returned empty response for: {}", symbol);
@@ -86,20 +86,20 @@ public class TwelveDataClient {
         }
     }
 
-    @Data
-    public static class TwelveDataQuote {
-        private String symbol;
-        private String name;
-        private String price; // Price returned as string, e.g. "22.50000"
-        private String sector;
+   @Data
+public static class TwelveDataQuote {
+    private String symbol;
+    private String name;
+    private String close; // Twelve Data returns price under "close" field, not "price"
+    private String sector;
 
-        public Double getPriceAsDouble() {
-            if (price == null || price.trim().isEmpty()) return null;
-            try {
-                return Double.parseDouble(price.trim());
-            } catch (NumberFormatException e) {
-                return null;
-            }
+    public Double getPriceAsDouble() {
+        if (close == null || close.trim().isEmpty()) return null;
+        try {
+            return Double.parseDouble(close.trim());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
+}
 }
